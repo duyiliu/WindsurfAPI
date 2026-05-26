@@ -558,11 +558,17 @@ export function shouldUseCascadeReuse({ useCascade, emulateTools, modelKey, allo
 // reference to `body` into streamResponse / nonStreamResponse where it
 // wasn't in scope, ReferenceError'ing every stream finish (#93 follow-up
 // reported by zhangzhang-bit).
+// Models that natively produce reasoning/thinking tokens but don't carry
+// a "-thinking" suffix in the model key.  Without this list the fallback
+// promoter incorrectly promotes their thinking → content, which causes
+// Hermes to treat an internal monologue as the final answer (#101 follow-up).
+const IMPLICIT_REASONING_MODELS = /(?:glm-5|gemini-2\.5)/i;
+
 export function shouldFallbackThinkingToText({ routingModelKey, wantThinking, accText, accThinking, hasToolCalls }) {
   if (hasToolCalls) return false;
   if (accText && accText.length) return false;
   if (!accThinking || !accThinking.length) return false;
-  if (routingModelKey && /thinking/i.test(routingModelKey)) return false;
+  if (routingModelKey && (/thinking/i.test(routingModelKey) || IMPLICIT_REASONING_MODELS.test(routingModelKey))) return false;
   if (wantThinking) return false;
   return true;
 }
@@ -2511,6 +2517,15 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
   } catch (err) {
     // Only count true auth failures against the account. Workspace/cascade/model
     // errors and transport issues shouldn't disable the key.
+    // v2.0.92 — executor not idle: same detection as stream path. Setting
+    // err.kind = 'transient_stall' before isTransient is computed makes
+    // isUpstreamTransientError() return true → caller sees
+    // upstream_transient_error → outer retry loop backs off and tries again
+    // with a fresh cascade (reuseEntryDead is set in the outer loop below).
+    if (/executor is not idle|CASCADE_RUN_STATUS_RUNNING/i.test(err.message || '')) {
+      err.isModelError = true;
+      err.kind = 'transient_stall';
+    }
     const isAuthFail = /unauthenticated|invalid api key|invalid_grant|permission_denied.*account/i.test(err.message);
     const isRateLimit = /rate limit|rate_limit|too many requests|quota/i.test(err.message);
     const isInternal = /internal error occurred.*error id/i.test(err.message);
@@ -3084,6 +3099,78 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
                     }
                   }
                 }
+                // v2.0.XX — NLU retry on stream tail (mirrors non-stream NLU
+                // retry, #125 DuZunTianXia). GLM-5.1 / Kimi narrate intent
+                // without concrete args on first pass; extractIntentFromNarrative
+                // returns [] because there's no value to bind. Send a correction
+                // round-trip so the model re-emits the protocol block. Only fires
+                // when NLU recovery above also produced 0 calls.
+                if (collectedToolCalls.length === 0) {
+                  const nluRetryStreamEnabled = process.env.WINDSURFAPI_NLU_RETRY !== '0'
+                    && (process.env.WINDSURFAPI_NLU_RETRY === '1'
+                        || /zhipu|glm|moonshot|kimi/i.test(String(provider || ''))
+                        || /^(?:glm|kimi)/i.test(String(modelKey || '')));
+                  if (nluRetryStreamEnabled && declaredTools.length > 0) {
+                    const lastUserStream = latestRealUserText(messages) || '';
+                    const intendedToolStream = detectToolIntentInNarrative(accNarrative, declaredTools, { lastUserText: lastUserStream });
+                    if (intendedToolStream) {
+                      try {
+                        const correctionMessages = [
+                          ...cascadeMessages,
+                          { role: 'assistant', content: accNarrative.slice(0, 4000) },
+                          { role: 'user', content:
+                            `Your previous response described intending to call \`${intendedToolStream}\` but didn't emit the tool-call protocol block. ` +
+                            `Re-emit the call now using the EXACT protocol format defined at the top of this conversation. ` +
+                            `Do NOT narrate. Do NOT describe. Just the protocol block. ` +
+                            `Provide a concrete argument value (the literal command / file path / query) — never placeholders like "command" or "the file". ` +
+                            `\n\n你刚才描述了想用 \`${intendedToolStream}\` 工具但没按协议格式 emit。请直接重新 emit 协议块，不要 narrate。给具体的 argument 字面值（如 ls / /etc/hostname / "echo hi"），不要写"命令" / "文件" 这种占位词。` },
+                        ];
+                        log.info(`Chat[stream]: NLU retry — first pass narrate-only, retrying with correction (tool=${intendedToolStream} markers=${markers.join(',') || 'none'})`);
+                        const retryChunks = await client.cascadeChat(correctionMessages, modelEnum, modelUid, {
+                          reuseEntry: null,
+                          toolPreamble: nativeBridgeOn ? '' : toolPreamble,
+                          displayModel: model,
+                          nativeMode: nativeBridgeOn,
+                          nativeAllowlist: nativeOpts?.allowlist || null,
+                          additionalSteps: nativeOpts?.additionalSteps || null,
+                        });
+                        let retryText = '';
+                        let retryThinking = '';
+                        for (const c of retryChunks) {
+                          if (c.text) retryText += c.text;
+                          if (c.thinking) retryThinking += c.thinking;
+                        }
+                        const retryParsed = parseToolCallsFromText(retryText, { modelKey, provider, route: deps?.route || 'chat' });
+                        let retryCalls = filterToolCallsByAllowlist(retryParsed.toolCalls || [], declaredTools);
+                        if (!retryCalls.length) {
+                          const retrySource = retryText.trim() ? retryText : retryThinking;
+                          const recovered2 = extractIntentFromNarrative(retrySource, declaredTools, { lastUserText: lastUserStream });
+                          if (recovered2.length) {
+                            retryCalls = filterToolCallsByAllowlist(
+                              recovered2.map((r, i) => ({ id: `nlu_retry_${i}_${Date.now().toString(36)}`, name: r.name, argumentsJson: r.argumentsJson })),
+                              declaredTools,
+                            );
+                          }
+                        }
+                        if (retryCalls.length) {
+                          log.info(`Chat[stream]: NLU retry — promoted ${retryCalls.length} tool_call(s) on second pass (tool=${intendedToolStream})`);
+                          for (const rawTc of retryCalls) {
+                            const tc = sanitizeToolCall(repairToolCallArguments(rawTc, messages));
+                            const idx = collectedToolCalls.length;
+                            collectedToolCalls.push(tc);
+                            emitToolCallDelta(tc, idx);
+                          }
+                          accText = '';
+                          accThinking = '';
+                        } else {
+                          log.warn(`Chat[stream]: NLU retry — second pass also produced 0 tool_calls; giving up (model=${modelKey})`);
+                        }
+                      } catch (retryErr) {
+                        log.warn(`Chat[stream]: NLU retry failed: ${retryErr.message}`);
+                      }
+                    }
+                  }
+                }
                 // v2.0.71 (#115) — fabricate detection on stream tail
                 // (only if NLU didn't recover anything).
                 if (markers.length === 0 && collectedToolCalls.length === 0) {
@@ -3245,6 +3332,18 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
             // the earlier conversation context").
             if (/context deadline exceeded|context cancellation while reading body|client\.timeout/i.test(err.message || '')) {
               reuseEntryDead = true;
+            }
+            // v2.0.92 — executor not idle: the cascade executor is still
+            // RUNNING from the previous turn. Happens when a reasoning model
+            // (e.g. glm-5.1) produces only thinking tokens and the cascade
+            // doesn't cleanly finish. Mark the entry dead (prevents the stuck
+            // cascade from being restored to the pool and hit again on the
+            // next turn), and treat as a transient stall so the retry loop
+            // spins up a fresh cascade instead of restoring the broken one.
+            if (/executor is not idle|CASCADE_RUN_STATUS_RUNNING/i.test(err.message || '')) {
+              reuseEntryDead = true;
+              err.isModelError = true;
+              err.kind = 'transient_stall';
             }
             const isAuthFail = /unauthenticated|invalid api key|invalid_grant|permission_denied.*account/i.test(err.message);
             const isRateLimit = /rate limit|rate_limit|too many requests|quota/i.test(err.message);
