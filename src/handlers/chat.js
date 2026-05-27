@@ -3155,6 +3155,16 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
                             );
                           }
                         }
+                        if (!retryCalls.length) {
+                          const userFallback = extractIntentFromUserRequest(lastUserStream, declaredTools, { intendedTool: intendedToolStream });
+                          if (userFallback.length) {
+                            retryCalls = filterToolCallsByAllowlist(
+                              userFallback.map((r, i) => ({ id: `nlu_user_${i}_${Date.now().toString(36)}`, name: r.name, argumentsJson: r.argumentsJson })),
+                              declaredTools,
+                            );
+                            if (retryCalls.length) log.info(`Chat[stream]: NLU retry — constructed ${retryCalls.length} tool_call(s) from original user request (tool=${intendedToolStream})`);
+                          }
+                        }
                         if (retryCalls.length) {
                           log.info(`Chat[stream]: NLU retry — promoted ${retryCalls.length} tool_call(s) on second pass (tool=${intendedToolStream})`);
                           for (const rawTc of retryCalls) {

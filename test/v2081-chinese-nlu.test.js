@@ -31,6 +31,7 @@ const fnTool = (name, props = { command: 'string' }, required = ['command']) => 
 const SHELL = fnTool('shell_exec');
 const BASH = fnTool('Bash');
 const READ = fnTool('Read', { file_path: 'string' }, ['file_path']);
+const WEB_SEARCH = fnTool('web_search', { query: 'string' }, ['query']);
 
 describe('Chinese verb recognition (Layer 3)', () => {
   it('catches "让我用 Bash 命令 \'ls\'" with concrete value', () => {
@@ -186,6 +187,16 @@ describe('detectToolIntentInNarrative — gates the v2.0.82 retry loop', () => {
     assert.equal(r.length, 1);
     assert.equal(r[0].name, 'Read');
     assert.deepEqual(JSON.parse(r[0].argumentsJson), { file_path: '/etc/hostname' });
+  });
+
+  it('detects stream web-search narration and extracts original query fallback', () => {
+    const narrative = 'The user is asking me to search the web to compare "OpenClaw" and "Hermes" to see which one is better. Let me do a web search for this.';
+    const lastUser = '搜索 OpenClaw 和 Hermes 哪个好';
+    assert.equal(detectToolIntentInNarrative(narrative, [WEB_SEARCH], { lastUserText: lastUser }), 'web_search');
+    const r = extractIntentFromUserRequest(lastUser, [WEB_SEARCH]);
+    assert.equal(r.length, 1);
+    assert.equal(r[0].name, 'web_search');
+    assert.deepEqual(JSON.parse(r[0].argumentsJson), { query: 'OpenClaw 和 Hermes 哪个好' });
   });
 
   it('returns null when no tool name AND no action verb in narrative', () => {

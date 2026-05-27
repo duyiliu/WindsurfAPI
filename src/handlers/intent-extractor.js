@@ -388,7 +388,8 @@ export function extractIntentFromUserRequest(text, tools, opts = {}) {
     } else if (/query|search/i.test(param) || /search|find|grep/i.test(fn)) {
       patterns.push(
         /[`"'「『]([^`"'「」『』\n]{1,500})[`"'」』]/,
-        /(?:搜索|查询|查找|search|find|query)\s+([^\n，。；]{1,500})/i,
+        /(?:搜索|查询|查找|search|find|query|比较|对比|compare)\s+([^\n，。；]{1,500})/i,
+        /(.{2,500})/s,
       );
     } else {
       patterns.push(/[`"'「『]([^`"'「」『』\n]{1,500})[`"'」』]/);
