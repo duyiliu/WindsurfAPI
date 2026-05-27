@@ -312,9 +312,9 @@ function userPromptLooksActionable(lastUserText) {
   // v2.0.81 (#125): widen to Chinese verbs/nouns so GLM-5.1 / Kimi
   // running with a Chinese system prompt + Chinese user turn still
   // routes through Layer 3.
-  if (/\b(?:run|exec|execute|cat|ls|echo|grep|find|read|search|list|invoke|call|fetch|get|fix|edit|write|patch)\b/i.test(lastUserText)) return true;
-  if (/\b(?:shell|bash|terminal|command|tool|function|file|path)\b/i.test(lastUserText)) return true;
-  if (/(?:运行|执行|读取|查看|列出|查找|搜索|获取|修改|编辑|写入|修复|分析|调用|使用|拉取|下载|找到|看一下|看看|检查)/.test(lastUserText)) return true;
+  if (/\b(?:run|exec|execute|cat|ls|echo|grep|find|read|search|list|invoke|call|fetch|get|fix|edit|write|patch|compare|browse)\b/i.test(lastUserText)) return true;
+  if (/\b(?:shell|bash|terminal|command|tool|function|file|path|web|browser|search)\b/i.test(lastUserText)) return true;
+  if (/(?:运行|执行|读取|查看|列出|查找|搜索|查询|查一下|查|联网|获取|修改|编辑|写入|修复|分析|比较|对比|哪个|调用|使用|拉取|下载|找到|看一下|看看|检查)/.test(lastUserText)) return true;
   if (/(?:文件|目录|路径|命令|工具|函数|参数|项目|代码|配置)/.test(lastUserText)) return true;
   return false;
 }

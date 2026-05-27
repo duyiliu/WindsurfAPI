@@ -191,7 +191,7 @@ describe('detectToolIntentInNarrative — gates the v2.0.82 retry loop', () => {
 
   it('detects stream web-search narration and extracts original query fallback', () => {
     const narrative = 'The user is asking me to search the web to compare "OpenClaw" and "Hermes" to see which one is better. Let me do a web search for this.';
-    const lastUser = '搜索 OpenClaw 和 Hermes 哪个好';
+    const lastUser = 'OpenClaw 和 Hermes 哪个好';
     assert.equal(detectToolIntentInNarrative(narrative, [WEB_SEARCH], { lastUserText: lastUser }), 'web_search');
     const r = extractIntentFromUserRequest(lastUser, [WEB_SEARCH]);
     assert.equal(r.length, 1);
