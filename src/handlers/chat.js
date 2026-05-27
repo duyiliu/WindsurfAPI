@@ -1987,7 +1987,7 @@ async function _handleChatCompletionsInner(body, context = {}) {
     // rationale (cascade trajectory left half-broken, next reuse hits
     // it and the model "loses" the prior conversation).
     const _resultMsg = String(result.body?.error?.message || '');
-    if (/context deadline exceeded|context cancellation while reading body|client\.timeout/i.test(_resultMsg)) {
+    if (/context deadline exceeded|context cancellation while reading body|client\.timeout|executor is not idle|CASCADE_RUN_STATUS_RUNNING/i.test(_resultMsg)) {
       reuseEntryDead = true;
     }
     lastErr = result;

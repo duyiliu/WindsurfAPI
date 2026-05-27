@@ -34,7 +34,7 @@ describe('upstream-timeout cascade invalidation (#101)', () => {
     // about sits between the `lastErr = err;` assignment and the rate-
     // limit branch — pin it explicitly so a future refactor that splits
     // the block doesn't silently regress.
-    const m = CHAT_JS.match(/lastErr = err;\s+reuseEntry = null;[\s\S]{0,1500}?const isAuthFail = /);
+    const m = CHAT_JS.match(/lastErr = err;\s+reuseEntry = null;[\s\S]*?const isAuthFail = /);
     assert.ok(m, 'stream catch block region not found — refactor may have changed shape');
     const region = m[0];
     assert.match(region, /context deadline exceeded/i,
@@ -59,6 +59,8 @@ describe('upstream-timeout cascade invalidation (#101)', () => {
     assert.match(region, /context deadline exceeded/i);
     assert.match(region, /context cancellation while reading body/i);
     assert.match(region, /client\\?\.timeout/i);
+    assert.match(region, /executor is not idle|CASCADE_RUN_STATUS_RUNNING/i,
+      'non-stream invalidation must also kill stuck GLM-5.1 cascades');
     assert.match(region, /reuseEntryDead = true/);
   });
 
