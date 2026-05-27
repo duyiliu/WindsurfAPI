@@ -216,8 +216,8 @@ function extractLayer3(text, names, primaryParam) {
   // either language (or mixed). The primary tool-name match still
   // requires the literal tool name (e.g. `Bash`, `shell_exec`) since
   // those are emitted in the original alphabet by every model.
-  const verbs = '(?:call|invoke|run|use|execute|exec|trigger|fire'
-    + '|调用|使用|运行|执行|触发|启动|让我用|让我使用|我会用|我将用|通过|借助|采用)';
+  const verbs = '(?:call|invoke|run|use|execute|exec|trigger|fire|read|view|search|find|list|show|cat'
+    + '|调用|使用|运行|执行|触发|启动|读取|查看|搜索|查找|列出|展示|让我用|让我使用|我会用|我将用|通过|借助|采用)';
   const articles = '(?:the\\s+)?';
   // Suffix matches ONLY tool/function meta-words (not arg labels like
   // "command" / "命令") so the latter stay in the tail and feed the
@@ -225,11 +225,33 @@ function extractLayer3(text, names, primaryParam) {
   // greedily consumed the very keyword that argPattern 2/4 needs.
   const suffix = '(?:\\s+(?:function|tool|method|函数|工具|方法))?';
   for (const fn of names) {
+    const param = primaryParam.get(fn) || 'input';
+    const fnMentionRe = new RegExp(`\\b${escapeRe(fn)}\\b|\\\`${escapeRe(fn)}\\\``, 'i');
+    if (fnMentionRe.test(text)) {
+      const globalArgPatterns = [
+        /\b(?:read|view|cat)\s+(?:the\s+)?(?:file|path)\s+([^\s"'`,.;。；，)]+)/i,
+        /\b(?:search|find)\s+(?:for\s+)?(?:query\s+)?["'`]([^"'`\n]{1,500})["'`]/i,
+        /\b(?:run|execute|exec)\s+(?:the\s+)?(?:command\s+)?["'`]([^"'`\n]{1,500})["'`]/i,
+      ];
+      for (const pat of globalArgPatterns) {
+        const a = text.match(pat);
+        const value = a?.[1]?.trim();
+        if (!value || looksLikePlaceholderValue(value)) continue;
+        out.push({
+          name: fn,
+          argumentsJson: JSON.stringify({ [param]: value }),
+          layer: 'narrative',
+          confidence: 0.65,
+        });
+        break;
+      }
+    }
     // Pattern: "<verb> [the] [function|tool] <fn> [function|tool]"
     // \b doesn't match between Chinese and Latin, so we drop the
     // leading word boundary and rely on the verb list itself.
+    const optionalBacktick = '\\`?';
     const namePat = new RegExp(
-      `${verbs}\\s*${articles}(?:function|tool|method|函数|工具|方法)?\\s*\\\`?${escapeRe(fn)}\\\`?${suffix}`,
+      `${verbs}\\s*${articles}(?:function|tool|method|函数|工具|方法)?\\s*(?:(?:the|a|an|this|that|file|path|query|command|input|argument|param(?:eter)?)\\s+){0,8}${optionalBacktick}${escapeRe(fn)}${optionalBacktick}${suffix}`,
       'gi',
     );
     let m;
@@ -240,6 +262,8 @@ function extractLayer3(text, names, primaryParam) {
       const argPatterns = [
         // with the command 'echo X' / with command "echo X" / with command `echo X`
         /\bwith\s+(?:the\s+)?(?:command|argument|param(?:eter)?|input|file[_-]?path|path|query)\s+["'`]([^"'`\n]{1,500})["'`]/i,
+        // with the file /etc/hostname / with path C:\\tmp\\x (unquoted)
+        /\bwith\s+(?:the\s+)?(?:file|file[_-]?path|path|query)\s+([^\s"'`,.;。；，)]+)/i,
         // bare keyword + value (no "with"): command 'echo X' / argument "X"
         /(?:^|\s)(?:command|argument|param(?:eter)?|input|file[_-]?path|path|query)\s+["'`]([^"'`\n]{1,500})["'`]/i,
         // 中文：用命令 'X' / 传入 'X' / 参数 'X' / 命令 'X' / 路径 'X'
@@ -320,7 +344,7 @@ export function detectToolIntentInNarrative(text, tools, opts = {}) {
   const { names } = indexTools(tools);
   if (!names.size) return null;
   // Verb forms (English + Chinese) that signal "I'm about to call X".
-  const verbPattern = /\b(?:call|invoke|run|use|execute|exec|trigger|fire|going to|will|let me|i'?ll|i'?m going|need to|should)\b|(?:调用|使用|运行|执行|触发|启动|让我|我会|我将|准备|打算|想要|需要|应该)/i;
+  const verbPattern = /\b(?:call|invoke|run|use|execute|exec|trigger|fire|going to|will|let me|i'?ll|i'?m going|need to|should|want(?:s)? to|asked me to|read|view|search|find|list|show|cat)\b|(?:调用|使用|运行|执行|触发|启动|读取|查看|搜索|查找|列出|展示|让我|我会|我将|准备|打算|想要|需要|应该)/i;
   if (!verbPattern.test(text)) return null;
   // Action keywords (file ops, search, read, etc.) — these stand in
   // for "the model is talking about USING tools generically".

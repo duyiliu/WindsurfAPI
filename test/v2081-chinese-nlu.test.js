@@ -160,6 +160,24 @@ describe('detectToolIntentInNarrative — gates the v2.0.82 retry loop', () => {
     assert.equal(r, 'shell_exec');
   });
 
+  it('detects GLM-5.1 thinking narrative "wants me to read ... using Read"', () => {
+    const r = detectToolIntentInNarrative(
+      'The user wants me to read the file /etc/hostname using the Read tool.',
+      [READ], { lastUserText: '请调用工具读取 /etc/hostname，只输出工具调用，不要自己编造结果。' },
+    );
+    assert.equal(r, 'Read');
+  });
+
+  it('extracts GLM-5.1 thinking narrative file path for Read', () => {
+    const r = extractIntentFromNarrative(
+      'The user wants me to read the file /etc/hostname using the Read tool.',
+      [READ], { lastUserText: '请调用工具读取 /etc/hostname，只输出工具调用，不要自己编造结果。' },
+    );
+    assert.equal(r.length, 1);
+    assert.equal(r[0].name, 'Read');
+    assert.deepEqual(JSON.parse(r[0].argumentsJson), { file_path: '/etc/hostname' });
+  });
+
   it('returns null when no tool name AND no action verb in narrative', () => {
     const r = detectToolIntentInNarrative(
       "I'll just answer directly.",
