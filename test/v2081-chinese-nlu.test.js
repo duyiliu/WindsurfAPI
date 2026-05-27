@@ -13,7 +13,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { extractIntentFromNarrative, detectToolIntentInNarrative } from '../src/handlers/intent-extractor.js';
+import { extractIntentFromNarrative, detectToolIntentInNarrative, extractIntentFromUserRequest } from '../src/handlers/intent-extractor.js';
 import { buildToolPreambleForProto } from '../src/handlers/tool-emulation.js';
 
 const fnTool = (name, props = { command: 'string' }, required = ['command']) => ({
@@ -172,6 +172,16 @@ describe('detectToolIntentInNarrative — gates the v2.0.82 retry loop', () => {
     const r = extractIntentFromNarrative(
       'The user wants me to read the file /etc/hostname using the Read tool.',
       [READ], { lastUserText: '请调用工具读取 /etc/hostname，只输出工具调用，不要自己编造结果。' },
+    );
+    assert.equal(r.length, 1);
+    assert.equal(r[0].name, 'Read');
+    assert.deepEqual(JSON.parse(r[0].argumentsJson), { file_path: '/etc/hostname' });
+  });
+
+  it('extracts GLM-5.1 original Chinese user request as fallback args for Read', () => {
+    const r = extractIntentFromUserRequest(
+      '请调用工具读取 /etc/hostname，只输出工具调用，不要自己编造结果。',
+      [READ],
     );
     assert.equal(r.length, 1);
     assert.equal(r[0].name, 'Read');

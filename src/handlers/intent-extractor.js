@@ -362,6 +362,51 @@ export function detectToolIntentInNarrative(text, tools, opts = {}) {
   return null;
 }
 
+export function extractIntentFromUserRequest(text, tools, opts = {}) {
+  if (process.env.WINDSURFAPI_NLU_RECOVERY === '0') return [];
+  if (typeof text !== 'string' || !text.trim()) return [];
+  if (!Array.isArray(tools) || !tools.length) return [];
+  if (!userPromptLooksActionable(text)) return [];
+  const { names, primaryParam } = indexTools(tools);
+  const out = [];
+  for (const fn of names) {
+    const param = primaryParam.get(fn) || 'input';
+    const fnMentionRe = new RegExp(`\\b${escapeRe(fn)}\\b|\\\`${escapeRe(fn)}\\\`|工具`, 'i');
+    if (!fnMentionRe.test(text) && names.size > 1) continue;
+    const patterns = [];
+    if (/^(?:read|file_?path|path)$/i.test(param)) {
+      patterns.push(
+        /(?:读取|查看|打开|文件|路径)\s*["'`「『]?([^\s"'`，。；、）)]+)["'`」』]?/,
+        /\b(?:read|view|cat)\s+(?:the\s+)?(?:file|path)?\s*["'`]?([^\s"'`,.;)]+)["'`]?/i,
+        /([A-Za-z]:[\\/][^\s"'`，。；、）)]+|\/[A-Za-z0-9._~+\-/]+(?:\.[A-Za-z0-9._~-]+)?)/,
+      );
+    } else if (/command|cmd|shell|bash/i.test(param) || /bash|shell|exec|command/i.test(fn)) {
+      patterns.push(
+        /[`"'「『]([^`"'「」『』\n]{1,500})[`"'」』]/,
+        /(?:运行|执行|命令(?:为)?|command|run|execute|exec)\s+([^\n，。；]{1,500})/i,
+      );
+    } else if (/query|search/i.test(param) || /search|find|grep/i.test(fn)) {
+      patterns.push(
+        /[`"'「『]([^`"'「」『』\n]{1,500})[`"'」』]/,
+        /(?:搜索|查询|查找|search|find|query)\s+([^\n，。；]{1,500})/i,
+      );
+    } else {
+      patterns.push(/[`"'「『]([^`"'「」『』\n]{1,500})[`"'」』]/);
+    }
+    for (const pat of patterns) {
+      const m = text.match(pat);
+      const value = m?.[1]?.trim()?.replace(/[.。；;，,]+$/, '');
+      if (!value || looksLikePlaceholderValue(value)) continue;
+      out.push({ name: fn, argumentsJson: JSON.stringify({ [param]: value }), layer: 'user-request', confidence: 0.7 });
+      break;
+    }
+  }
+  if (out.length) {
+    log.info(`NLU recovery: extracted ${out.length} tool_call(s) from user request — ${out.map(t => `${t.name}@${t.layer}/${t.confidence.toFixed(2)}`).join(', ')}`);
+  }
+  return out;
+}
+
 /**
  * Top-level extractor. Returns a deduped, confidence-sorted list of
  * extracted tool_calls. Empty array when nothing is recoverable.

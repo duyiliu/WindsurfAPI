@@ -11,7 +11,7 @@ import { resolveModel, getModelInfo, pickRateLimitFallback } from '../models.js'
 import { getLsFor, ensureLs } from '../langserver.js';
 import { config, log } from '../config.js';
 import { recordRequest, recordTokenUsage, recordPolicyBlocked, recordRateLimited } from '../dashboard/stats.js';
-import { extractIntentFromNarrative, detectToolIntentInNarrative } from './intent-extractor.js';
+import { extractIntentFromNarrative, detectToolIntentInNarrative, extractIntentFromUserRequest } from './intent-extractor.js';
 import { markRequest as markQuietWindowRequest } from '../dashboard/quiet-window-updater.js';
 import { isModelAllowed } from '../dashboard/model-access.js';
 import { cacheKey, cacheGet, cacheSet } from '../cache.js';
@@ -2317,7 +2317,15 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
                   allText = retryParsed.text || '';
                   allThinking = '';
                 } else {
-                  log.warn(`Chat[non-stream]: NLU retry — second pass also produced 0 tool_calls; giving up (model=${modelKey})`);
+                  const userFallback = extractIntentFromUserRequest(lastUser, tools, { intendedTool });
+                  if (userFallback.length) {
+                    log.info(`Chat[non-stream]: NLU retry — constructed ${userFallback.length} tool_call(s) from original user request (tool=${intendedTool})`);
+                    toolCalls = filterToolCallsByAllowlist(userFallback, tools);
+                    allText = '';
+                    allThinking = '';
+                  } else {
+                    log.warn(`Chat[non-stream]: NLU retry — second pass also produced 0 tool_calls; giving up (model=${modelKey})`);
+                  }
                 }
               } catch (retryErr) {
                 log.warn(`Chat[non-stream]: NLU retry failed: ${retryErr.message}`);
