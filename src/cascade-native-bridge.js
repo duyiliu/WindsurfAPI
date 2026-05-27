@@ -118,7 +118,7 @@ function forwardReadArgs(args) {
 }
 function reverseReadArgs(cascade) {
   return {
-    file_path: stripFileUri(cascade.absolute_path_uri || ''),
+    file_path: stripFileUri(cascade.absolute_path_uri || cascade.target_file || cascade.path || ''),
     ...(cascade.offset ? { offset: cascade.offset } : {}),
     ...(cascade.limit ? { limit: cascade.limit } : {}),
   };
@@ -135,7 +135,7 @@ function forwardBashArgs(args) {
 }
 function reverseBashArgs(cascade) {
   return {
-    command: cascade.command_line || cascade.proposed_command_line || '',
+    command: cascade.command_line || cascade.proposed_command_line || cascade.command || '',
     ...(cascade.cwd ? { cwd: cascade.cwd } : {}),
   };
 }
@@ -427,6 +427,26 @@ function reverseCodexShellArgs(cascade) {
 
 
 // ─── Caller-tools introspection ─────────────────────────────────────
+
+export function reverseCascadeToolArgsForCaller(callerName, cascadeArgs) {
+  const reverseFn = TOOL_MAP[callerName]?.reverse;
+  try { return reverseFn ? reverseFn(cascadeArgs || {}) : (cascadeArgs || {}); }
+  catch { return cascadeArgs || {}; }
+}
+
+export function mapCascadeToolCallToCaller(raw, lookup) {
+  const candidates = lookup?.get(raw?.name) || [];
+  const callerName = candidates[0];
+  if (!callerName) return null;
+  let cascadeArgs;
+  try { cascadeArgs = JSON.parse(raw.argumentsJson || '{}'); } catch { cascadeArgs = {}; }
+  const openaiArgs = reverseCascadeToolArgsForCaller(callerName, cascadeArgs);
+  return {
+    id: raw.id || `call_${Date.now().toString(36)}`,
+    name: callerName,
+    argumentsJson: JSON.stringify(openaiArgs ?? {}),
+  };
+}
 
 /**
  * canMapAllTools(tools) — returns true when EVERY caller-declared tool is

@@ -28,7 +28,7 @@ import {
 } from './tool-emulation.js';
 import {
   shouldUseNativeBridge, canMapAllTools, partitionTools, buildReverseLookup,
-  buildAdditionalStepsFromHistory, TOOL_MAP,
+  buildAdditionalStepsFromHistory, TOOL_MAP, mapCascadeToolCallToCaller,
 } from '../cascade-native-bridge.js';
 import { sanitizeText, sanitizeToolCall, PathSanitizeStream } from '../sanitize.js';
 import { registerSseController } from '../sse-registry.js';
@@ -2148,30 +2148,37 @@ async function nonStreamResponse(client, id, created, model, modelKey, messages,
         const nativeCalls = [];
         for (const raw of (chunks.toolCalls || [])) {
           if (!raw?.cascade_native) continue;
-          const candidates = lookup.get(raw.name) || [];
-          const callerName = candidates[0];
-          if (!callerName) continue;
-          const reverseFn = TOOL_MAP[callerName]?.reverse;
-          let cascadeArgs;
-          try { cascadeArgs = JSON.parse(raw.argumentsJson || '{}'); } catch { cascadeArgs = {}; }
-          let openaiArgs;
-          try { openaiArgs = reverseFn ? reverseFn(cascadeArgs) : cascadeArgs; }
-          catch { openaiArgs = cascadeArgs; }
-          nativeCalls.push({
-            id: raw.id || `call_${nativeCalls.length}_${Date.now().toString(36)}`,
-            name: callerName,
-            argumentsJson: JSON.stringify(openaiArgs ?? {}),
-          });
+          const mapped = mapCascadeToolCallToCaller(raw, lookup);
+          if (mapped) nativeCalls.push(mapped);
         }
         toolCalls = filterToolCallsByAllowlist(nativeCalls, tools);
         // Strip any tool-call markup that may have leaked into text — the
         // planner sometimes narrates "I'm going to look at X" alongside
         // emitting the cascade step, and the caller doesn't want that
         // noise.
-        allText = stripToolMarkupFromText(allText);
+        const nativeTextSource = (allText && allText.trim()) ? allText : allThinking;
+        if (toolCalls.length === 0 && nativeTextSource && /<invoke\s+name=|<(?:read_file|view_file|run_command)\b/i.test(nativeTextSource)) {
+          const parsedNativeText = parseToolCallsFromText(nativeTextSource, { dialect: 'openai_json_xml', modelKey, provider, route });
+          const recovered = [];
+          for (const tc of parsedNativeText.toolCalls || []) {
+            const mapped = mapCascadeToolCallToCaller({
+              id: tc.id,
+              name: tc.name,
+              argumentsJson: tc.argumentsJson,
+            }, lookup);
+            if (mapped) recovered.push(mapped);
+          }
+          toolCalls = filterToolCallsByAllowlist(recovered, tools);
+          if (toolCalls.length) {
+            log.info(`Chat[non-stream]: nativeBridge text-invoke recovered ${toolCalls.length} tool_call(s)`);
+            allText = parsedNativeText.text || '';
+            if (nativeTextSource === allThinking) allThinking = '';
+          }
+        }
         if (toolCalls.length === 0 && (chunks.toolCalls || []).length > 0) {
           log.info(`Chat[non-stream]: nativeBridge=true received ${chunks.toolCalls.length} cascade tool calls but none mapped to caller tools (kinds=${chunks.toolCalls.map(tc => tc.name).join(',')})`);
         }
+        allText = stripToolMarkupFromText(allText);
       } else if (emulateTools) {
         // Capture pre-parse text once for diagnostic logging — useful when
         // non-Claude models emit a tool call in a format the parser missed.
@@ -2824,20 +2831,8 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
         if (nativeBridgeOn && chunk.nativeToolCall) {
           const raw = chunk.nativeToolCall;
           const lookup = nativeOpts?.callerLookup || new Map();
-          const candidates = lookup.get(raw.name) || [];
-          const callerName = candidates[0];
-          if (callerName) {
-            const reverseFn = TOOL_MAP[callerName]?.reverse;
-            let cascadeArgs;
-            try { cascadeArgs = JSON.parse(raw.argumentsJson || '{}'); } catch { cascadeArgs = {}; }
-            let openaiArgs;
-            try { openaiArgs = reverseFn ? reverseFn(cascadeArgs) : cascadeArgs; }
-            catch { openaiArgs = cascadeArgs; }
-            const candidate = {
-              id: raw.id || `call_${collectedToolCalls.length}_${Date.now().toString(36)}`,
-              name: callerName,
-              argumentsJson: JSON.stringify(openaiArgs ?? {}),
-            };
+          const candidate = mapCascadeToolCallToCaller(raw, lookup);
+          if (candidate) {
             const filtered = filterToolCallsByAllowlist([candidate], declaredTools);
             if (filtered.length) {
               const tc = sanitizeToolCall(repairToolCallArguments(filtered[0], messages));
@@ -3214,20 +3209,8 @@ function streamResponse(id, created, model, modelKey, provider, messages, cascad
               const nativeRaw = [];
               for (const raw of cascadeResult.toolCalls) {
                 if (!raw?.cascade_native) continue;
-                const candidates = lookup.get(raw.name) || [];
-                const callerName = candidates[0];
-                if (!callerName) continue;
-                const reverseFn = TOOL_MAP[callerName]?.reverse;
-                let cascadeArgs;
-                try { cascadeArgs = JSON.parse(raw.argumentsJson || '{}'); } catch { cascadeArgs = {}; }
-                let openaiArgs;
-                try { openaiArgs = reverseFn ? reverseFn(cascadeArgs) : cascadeArgs; }
-                catch { openaiArgs = cascadeArgs; }
-                nativeRaw.push({
-                  id: raw.id || `call_${nativeRaw.length}_${Date.now().toString(36)}`,
-                  name: callerName,
-                  argumentsJson: JSON.stringify(openaiArgs ?? {}),
-                });
+                const mapped = mapCascadeToolCallToCaller(raw, lookup);
+                if (mapped) nativeRaw.push(mapped);
               }
               const filteredNative = filterToolCallsByAllowlist(nativeRaw, declaredTools);
               for (const rawTc of filteredNative) {

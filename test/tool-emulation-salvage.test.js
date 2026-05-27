@@ -149,4 +149,22 @@ describe('parseToolCallsFromText salvage pass', () => {
     assert.equal(r.toolCalls[0].name, 'echo_text');
     assert.equal(JSON.parse(r.toolCalls[0].argumentsJson).text, 'HELLO');
   });
+
+  test('recovers Windsurf native invoke XML emitted by GLM-5.1 in DEFAULT planner mode', () => {
+    const text = '<invoke name="view_file">\n<parameter name="target_file">/etc/hostname</parameter>\n</invoke>';
+    const r = parseToolCallsFromText(text, { dialect: 'openai_json_xml' });
+    assert.equal(r.toolCalls.length, 1);
+    assert.equal(r.toolCalls[0].name, 'view_file');
+    assert.deepEqual(JSON.parse(r.toolCalls[0].argumentsJson), { target_file: '/etc/hostname' });
+    assert.equal(r.text, '');
+  });
+
+  test('recovers Windsurf native short XML emitted by GLM-5.1', () => {
+    const text = '<read_file>\n<path>/etc/hostname</path>\n</read_file>';
+    const r = parseToolCallsFromText(text, { dialect: 'openai_json_xml' });
+    assert.equal(r.toolCalls.length, 1);
+    assert.equal(r.toolCalls[0].name, 'view_file');
+    assert.deepEqual(JSON.parse(r.toolCalls[0].argumentsJson), { path: '/etc/hostname' });
+    assert.equal(r.text, '');
+  });
 });

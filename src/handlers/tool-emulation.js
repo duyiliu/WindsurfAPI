@@ -903,6 +903,19 @@ function parseNonOpenAIDialectBuffer(dialect, body, startSeen) {
       last = match.index + match[0].length;
     }
     keep.push(body.slice(last));
+
+    const salvaged = salvageToolCallsFromText(keep.join(''));
+    if (salvaged.toolCalls.length) {
+      for (const tc of salvaged.toolCalls) {
+        calls.push({
+          id: tc.id || `call_${startSeen + i}_${Date.now().toString(36)}`,
+          name: tc.name,
+          argumentsJson: tc.argumentsJson,
+        });
+        i += 1;
+      }
+      return { text: salvaged.text, toolCalls: calls };
+    }
     return { text: keep.join(''), toolCalls: calls };
   }
 
@@ -1357,7 +1370,45 @@ function salvageToolCallsFromText(text) {
     }
   }
 
-  // 3. Whitespace-tolerant bare {"name":..., "arguments":...} — ONLY if the
+  // 3. Windsurf native invoke XML: <invoke name="view_file"><parameter name="target_file">...</parameter></invoke>.
+  //    GLM-5.1 emits this when Cascade DEFAULT mode exposes native tool names.
+  working = working.replace(/<invoke\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/invoke>/gi, (match, rawName, body) => {
+    const name = String(rawName || '').trim();
+    if (!name) return match;
+    const args = {};
+    body.replace(/<parameter\s+name=["']([^"']+)["']\s*>\s*([\s\S]*?)\s*<\/parameter>/gi, (_m, key, value) => {
+      const k = String(key || '').trim();
+      if (k) args[k] = String(value || '').trim();
+      return '';
+    });
+    calls.push({ id: newId(), name, argumentsJson: JSON.stringify(args) });
+    formats.add('windsurf_invoke_xml');
+    return '';
+  });
+
+  // 4. Windsurf/Codeium native short XML forms seen from GLM-5.1 DEFAULT
+  //    planner mode: <read_file><path>...</path></read_file> and
+  //    <run_command><command>...</command></run_command>.
+  const nativeTagAliases = new Map([
+    ['read_file', 'view_file'],
+    ['view_file', 'view_file'],
+    ['run_command', 'run_command'],
+  ]);
+  working = working.replace(/<(read_file|view_file|run_command)\b[^>]*>\s*([\s\S]*?)\s*<\/\1>/gi, (match, rawName, body) => {
+    const name = nativeTagAliases.get(String(rawName || '').toLowerCase());
+    if (!name) return match;
+    const args = {};
+    body.replace(/<([a-zA-Z0-9_-]+)\b[^>]*>\s*([\s\S]*?)\s*<\/\1>/g, (_m, key, value) => {
+      const k = String(key || '').trim();
+      if (k) args[k] = String(value || '').trim();
+      return '';
+    });
+    calls.push({ id: newId(), name, argumentsJson: JSON.stringify(args) });
+    formats.add('windsurf_native_xml');
+    return '';
+  });
+
+  // 5. Whitespace-tolerant bare {"name":..., "arguments":...} — ONLY if the
   //    strict parser hasn't already handled it. Look for `"name"` as a key
   //    with optional whitespace and matching `"arguments"` key in the same
   //    object. Reuses matchClosingBrace for proper bracket counting.
